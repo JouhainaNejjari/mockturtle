@@ -83,150 +83,130 @@ public:
   {
     /* TODO: write your implementation here */
 
-      // Computing split_var and rounds and storing in the statistics struct 
+    // Computing split_var and rounds
+    uint32_t n = _ntk.num_pis();
+    uint32_t split_var = compute_splitting_var(n);
+    uint32_t rounds = compute_rounds(n, split_var);
 
-  
+    // Reporting split_var and rounds to the user as statistics
+    _st.split_var = split_var;
+    _st.rounds = rounds;
+    std::cout << "Split var=" << split_var << "\n";
+    std::cout << "Rounds=" << rounds << "\n";
 
-    _st.split_var= function_split_var(_ntk);
-    _st.rounds= function_rounds (_ntk,_st.split_var)
-  
+    // Initializing patterns
+    pattern_t patterns(_ntk);
+    init_patterns(patterns, _ntk, split_var);
 
-     //Initializing pattern
+    // Simulating first round
+    default_simulator<kitty::dynamic_truth_table> sim(split_var);
+    simulate_nodes(_ntk, patterns, sim);
 
-     pattern_t patterns(_ntk);
-     init_patterns(_ntk,_st.split_var,patterns);
+    // Checking patterns
+    if (!check( _ntk,patterns )){
+      return(false);
+    }
 
-     // Simulating first round
+    // Looping over simulation rounds
+    for (uint32_t round = 1; round < rounds; round++) {
+      clean(patterns);
+      update_pattern(round, patterns, split_var);
+      simulate_nodes(_ntk, patterns, sim);
 
-     default_simulator<kitty::dynamic_truth_table> sim(_st.split_var);
-     simulate_nodes(_ntk, patterns, sim);
+      // Pattern checking
+      if (!check( _ntk,patterns )){
+          return(false);
+          }
+    }
 
-     // Checking patterns
-
-     if (!check( _ntk, patterns){
-
-       return false ;
-     }
-
-     // Looping over simulation rounds
-
-     for (uint32_t i = 1; i < rounds; i++) {
-       
-       pattern_clear(patterns);
-       update_patterns(i, patterns);
-       simulate_nodes(_ntk, patterns, sim);
-
-       // Pattern checking
-       if (!check( _ntk, patterns){
-
-           return false ;
-           }
-     }
-
-     return true;
-   }
+    return true;
+  }
 
 private:
   /* you can add additional methods here */
+  uint32_t compute_splitting_var(uint32_t n) {
+      uint32_t split_var;
+      if (n<=6) {
+        split_var=n;
+      }
+      else {
+          uint32_t v = _ntk.size();
+          uint32_t m = 7;
+          uint32_t max = 1 << 29;
+          while (m<=n && ((( 32 + (1 << (m-3)) )*v) <=max))
+            m++;
+          m--;
+          split_var = m;
+      }
+      return split_var;
+  }
 
-   uint32_t function_split_var(Ntk& _k) {
-       uint32_t n;
-       uint32_t w;
+  uint32_t compute_rounds(uint32_t n, uint32_t split_var) {
+      return (1 << (n-split_var));
+  }
 
+  void init_patterns( pattern_t patterns, Ntk& _N, uint32_t split_var){
 
-     n=_k.num_pis();
+      _N.foreach_pi( [&]( auto const& n, auto p ){
+       kitty::dynamic_truth_table tt (split_var);
+       if (p < split_var) {
+        kitty:: create_nth_var(tt , p);
+       }
+       patterns[n]=tt;
+    } );
+  }
 
-     w= 3 + ( (log((1<<29)/(_k._storage->nodes.size())-32))/log(2) ) ; 
-
-     if (n<=6) {
-       return n;
-     } 
-     else {
-       return std::min(n,w) ; 
-     }
-   }
-       
-
-   uint32_t function_rounds(Ntk& _k, uint32_t split_var) {
-       return 1 << (n-split_var);
-   }
-
-   void init_patterns( Ntk& _k, uint32_t split_var, pattern_t& patterns){
-       
-
-       _k.foreach_pi( [&]( auto const& n, auto o ){
-        kitty::dynamic_truth_table tt (split_var);
-        if (o < split_var) {
-        kitty:: create_nth_var(tt , o);
+  bool check (Ntk & _N ,pattern_t & patterns){
+    bool eq = true;
+    _N.foreach_po( [&]( auto const& f) {
+      if ( _N.is_complemented( f ) )
+      {
+        if ( !is_const0(~patterns[f]) ) {
+          eq = false;
         }
-        patterns[n]=tt;
-     } );
-    
-   }
+      }
+      else
+      {
+        if ( !is_const0(patterns[f]) ) {
+        eq = false;
+        }
+      }
+    } );
+    return eq;
+  }
 
-   bool check ( Ntk& _k ,pattern_t& patterns){
-     bool eq = true;
-     _k.foreach_po( [&]( auto const& p) {
-       if ( _k.is_complemented( p ) )
-       {
-         if ( !is_const0(~patterns[p]) ) {
+  /*the function to update the pattern*/
+  void update_pattern( uint32_t & round , pattern_t& patterns, uint32_t split_var){
 
-           eq = false;
-         }
-       }
-       else
-       {
-         if ( !is_const0(patterns[p]) ) {
+    uint32_t r = round;
+    // Updating patterns
+      _ntk.foreach_pi( [&]( auto const& n, auto i )
+      {
+        // Splitting variables for indices after split_var
+        if (i >= split_var ){
+          // Case where round is odd
+          if (r % 2 == 1) {
+            // Updating patterns
+            if ( is_const0(patterns[n]) ) patterns[n] = ~patterns[n];
+          }
+        // Case where round is even
+        else {
+          // Updating patterns
+          if ( !is_const0(patterns[n]) ) patterns[n] = ~patterns[n];
+        }
+        r /= 2;
 
-         eq = false;
-         }
-       }
+        }
+      } );
+  }
 
-     } 
-     );
-
-     return eq;
-   }
-
-   /*the function to update the pattern*/
-
-   void update_patterns( uint32_t i , pattern_t& patterns, uint32_t split_var ){
-
-     uint32_t r = i;
-     // Updating patterns
-       _ntk.foreach_pi( [&]( auto const& n, auto i )
-       {
-         // Splitting variables for indices after split_var
-         if (i >= split_var ){
-           // Case where round is odd
-           if (r % 2 == 1) {
-             // Updating patterns
-             if ( is_const0(patterns[n]) ) 
-                patterns[n] = ~patterns[n];
-           }
-         // Case where round is even
-         else {
-           // Updating patterns
-           if ( !is_const0(patterns[n]) ) 
-              patterns[n] = ~patterns[n];
-         }
-         r /= 2;
-
-         }
-       } 
-       );
-   }
-
-   void cleaning (pattern_t& patterns){
-     
-      _ntk.foreach_gate( [&]( auto const& n )
-     {
-        patterns.erase(n);
-     } 
-     );
-   
-
-   }
+  void clean(pattern_t& patterns) {
+    // Cleaning old patterns
+    _ntk.foreach_gate( [&]( auto const& m )
+    {
+       patterns.erase(m);
+    } );
+  }
 
 private:
   Ntk& _ntk;
